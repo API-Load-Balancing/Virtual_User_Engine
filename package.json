@@ -16,7 +16,4 @@
     "url": "https://github.com/API-Load-Testing/Virtual_User_Engine/issues"
   },
   "homepage": "https://github.com/API-Load-Testing/Virtual_User_Engine#readme",
-  "dependencies": {
-    "request": "^2.72.0"
-  }
 }
