@@ -1,8 +1,8 @@
 {
   "name": "api_load_testing_virtual_user_engine",
-  "version": "0.0.0",
+  "version": "0.6.3",
   "description": "",
-  "main": "index.js",
+  "main": "virtual_user_engine.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -16,4 +16,8 @@
     "url": "https://github.com/API-Load-Testing/Virtual_User_Engine/issues"
   },
   "homepage": "https://github.com/API-Load-Testing/Virtual_User_Engine#readme",
+  "dependencies": {
+    "advance-require": "^0.5.0",
+    "lodash": "^4.13.1"
+  }
 }
