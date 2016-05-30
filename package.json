@@ -1,6 +1,6 @@
 {
-  "name": "api_load_testing_virtual_user_engine",
-  "version": "0.6.3",
+  "name": "virtual-user-engine",
+  "version": "0.6.5",
   "description": "",
   "main": "virtual_user_engine.js",
   "scripts": {

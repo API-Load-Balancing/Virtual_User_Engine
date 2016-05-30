@@ -20,7 +20,7 @@ var Virtual_User_Engine = function () {
     var _Code_FileName = null;
     var _Code_DirName = null;
     this.setCodeFileName = function (filename) {
-        _Code_FileName = path.basename(filename);
+        _Code_FileName = path.resolve(filename);
         _Code_DirName = path.dirname(filename);
     };
 
