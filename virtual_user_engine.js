@@ -2,7 +2,7 @@
 'use strict';
 
 var Advance_Require = require('advance-require');
-var Http_Request_Options = require('./lib/http_request_options');
+var Http_Request_Options = require('http-request-hook');
 var fs = require('fs');
 var vm = require('vm');
 var path = require('path');
