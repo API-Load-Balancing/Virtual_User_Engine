@@ -1,0 +1,7 @@
+(function (exports, require, module, __filename, __dirname) {
+
+    'use strict';
+    // Script Run Started
+    __emitOnStart();
+
+    var userScriptRunFunction = function () {

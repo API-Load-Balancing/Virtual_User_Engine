@@ -2,139 +2,309 @@
 'use strict';
 
 var Advance_Require = require('advance-require');
-var Http_Request_Options = require('http-request-hook');
-var fs = require('fs');
-var vm = require('vm');
-var path = require('path');
-
+var Http_Request_Hook = require('http-request-hook');
+const _ = require('lodash');
+const fs = require('fs');
+const vm = require('vm');
+const path = require('path');
+const util         = require("util");
+const EventEmitter = require("events").EventEmitter;
+const timers = require('timers');
+const innerBuffer = require('buffer').Buffer;
+const noop = function() {};
 
 var Virtual_User_Engine = function () {
 
-    var thisObject = this;
-    this.requireOptions = new Advance_Require.options();
-    this.requestOptions = new Http_Request_Options.options();
+    EventEmitter.call(this);
+    this.requireOptions = Advance_Require.options;
+    Advance_Require.options.useSandbox = true;
+    Advance_Require.options._useNativeModulesCopyList = ['http', 'https'];
+    this.requestOptions = new Http_Request_Hook.options();
 
-    this.timeout = 900000;
+    this.timeout = 120000;
     this.contextVariables = {};
+    this._Code_FileName = null;
+    this._Code_DirName = null;
+    this._code = "return null;";
+}
+util.inherits(Virtual_User_Engine, EventEmitter);
+var VUE = new Virtual_User_Engine();
 
-    var _Code_FileName = null;
-    var _Code_DirName = null;
-    this.setCodeFileName = function (filename) {
-        _Code_FileName = path.resolve(filename);
-        _Code_DirName = path.dirname(filename);
-    };
+var emit = function () {
+    VUE.emit.apply(VUE, arguments);
+}
 
+Virtual_User_Engine.prototype.getCodeFromFile = function (filename) {
 
-    var _code = "return null;";
-    this.getCodeFromFile = function (filename) {
+    var absolutefilename = require.resolve(filename);
+    this._code = fs.readFileSync(absolutefilename, 'utf8');
 
-        var myRequireOptions = new Advance_Require.options();
-        myRequireOptions.addOverrideModule(filename, function (moduleName, absolutefilename, originalRequire) {
-            _code = fs.readFileSync(absolutefilename, 'utf8');
-            _Code_FileName = absolutefilename;
-            _Code_DirName = path.dirname(absolutefilename);
-            return { };
-        });
-        myRequireOptions.addPath('./node_modules');
-        var myInnerRequire = Advance_Require.getAdvanceRequire(module, myRequireOptions)
-        myInnerRequire(filename);
-    };
-    this.getCodeFromString = function (codeString) {
-        _code = codeString;
-    };
+    this._Code_FileName = absolutefilename;
+    this._Code_DirName = path.dirname(absolutefilename);
+};
 
-
-    var wrapCode = function () {
-        return '(function (exports, require, module, __filename, __dirname) { \n' + _code + '\n});';
-    };
+Virtual_User_Engine.prototype.getCodeFromString = function (codeString, filename) {
+    this._code = codeString;
+    if (!filename) filename = 'userscript.js';
+    var absolutefilename = path.resolve(__dirname, filename);
+    this._Code_FileName = absolutefilename;
+    this._Code_DirName = path.dirname(absolutefilename);
+};
 
 
+function getContext(maxTimeout, userVariables, sandboxID) {
 
-    var upgradedModule = null;
-    var runFunction = null;
-    this.prepareToRun = function () {
+    function sandbox() {
 
-        var wrapedCode = wrapCode();
-        upgradedModule = Advance_Require.getUpgradedModule(module, this.requireOptions);
-        var myHttp = upgradedModule.prototype.require('http');
-        var myHttps = upgradedModule.prototype.require('https');
-        Http_Request_Options.applyRequestOptions(this.requestOptions, myHttp);
-        Http_Request_Options.applyRequestOptions(this.requestOptions, myHttps);
+        this.process = process;
+        this.Buffer = innerBuffer;
+        this._ActiveHandlers = 0;
+        this.__sandboxID = sandboxID;
+        this.__timeoutHappen = false;
+        this.__endOfCodeReached__ = false;
+        this.__scriptStartTime = 0;
 
-        var context = createSafeContext();
-        var contextOptions = {
-            filename: __filename,
-            timeout: this.timeout
+        var self = this;
+        var __timeoutHandle = 0;
+
+        for (var item in userVariables) {  // Admin variables
+            this[item] = userVariables[item];
         }
-        runFunction = vm.runInContext(wrapedCode, context, contextOptions);
-    } // prepare to run
 
+        this.decActiveHandlers = function (refname) {
+            self._ActiveHandlers--;
+            if (self.__endOfCodeReached__ && self._ActiveHandlers <= 0) {
+                if (__timeoutHandle) clearTimeout(__timeoutHandle);
+                var scriptEndTime = new Date();
+                emit('vmEnd', self.__sandboxID, (scriptEndTime - self.__scriptStartTime) );
+            }
+        };
+        this.incActiveHandlers = function (name) {
+            self._ActiveHandlers++;
+        };
+        this.__emitOnStart = function() {
+            self._ActiveHandlers = 0;
+            self.__endOfCodeReached__ = false;
+            self.__scriptStartTime = new Date();
+            self.__timeoutHappen = false;
 
-    var createSafeContext = function () {
+            __timeoutHandle = setTimeout(setTimeoutHappen, maxTimeout+50);
 
-        var sandbox = {
+            emit('vmStart', self.__sandboxID);
+        };
+        var setTimeoutHappen = function () {
+            self.__timeoutHappen = true;
 
-            process: process,
-            console: console,
-            setTimeout: setTimeout,
-            setInterval: setInterval,
-            setImmediate: setImmediate,
-            clearTimeout: clearTimeout,
-            clearInterval: clearInterval,
-            clearImmediate: clearImmediate
+            emit('vmTimeout', self.__sandboxID, self._ActiveHandlers);
+            self.incActiveHandlers();
+            self.decActiveHandlers('vmTimeout');
+        };
+        this.__emitEndofCode = function () {
+            self.__endOfCodeReached__ = true;
+            var scriptEndTime = new Date();
+            if (self.__endOfCodeReached__ && self._ActiveHandlers <= 0) {
+                if (__timeoutHandle) clearTimeout(__timeoutHandle);
+
+                emit('vmEnd', self.__sandboxID, (scriptEndTime - self.__scriptStartTime) );
+            } else {
+                emit('vmEndofCode', self.__sandboxID, (scriptEndTime - self.__scriptStartTime) );
+            }
+        };
+
+        this.clearImmediate = function (immediateObject) {
+            if (immediateObject && immediate._onImmediate) {
+                timers.clearImmediate(immediateObject);
+                self.decActiveHandlers('clearImmediate');
+            }
+        };
+        this.clearInterval = function (intervalObject) {
+            if (intervalObject && intervalObject._repeat) {
+                timers.clearInterval(intervalObject);
+                self.decActiveHandlers('clearInterval');
+            }
+        };
+        this.clearTimeout = function (timeoutObject) {
+            if (timeoutObject && (timeoutObject[kOnTimeout] || timeoutObject._onTimeout)) {
+                timers.clearTimeout(timeoutObject);
+                self.decActiveHandlers('clearTimeout');
+            }
+        };
+        this.setImmediate = function (callback, args) {
+            if (self.__timeoutHappen) return {};
+
+            self.incActiveHandlers('setImmediate');
+            return timers.setImmediate(function () {
+                callback.apply(args);
+                self.decActiveHandlers('setImmediate_executed');
+            });
+        };
+        this.setInterval = function (callback, delay, args) {
+            if (self.__timeoutHappen) return {};
+
+            self.incActiveHandlers('setInterval');
+            var intervalObj = timers.setInterval(function () {
+                if (self.__timeoutHappen) {
+                    self.clearInterval(intervalObj);
+                    return;
+                }
+                callback.apply(intervalObj, args);
+            }, Math.min(delay, maxTimeout));
+            return intervalObj;
+        };
+        this.setTimeout = function (callback, delay, args) {
+            if (self.__timeoutHappen) return {};
+
+            self.incActiveHandlers('setTimeout');
+            return timers.setTimeout(function () {
+                if (!self.__timeoutHappen) {
+                    callback.apply(args);
+                }
+                self.decActiveHandlers('setTimeout_executed');
+            }, Math.min(delay, maxTimeout));
         };
 
         if (global.DTRACE_HTTP_SERVER_RESPONSE) {
-            sandbox.DTRACE_HTTP_SERVER_RESPONSE = global.DTRACE_HTTP_SERVER_RESPONSE;
-            sandbox.DTRACE_HTTP_SERVER_REQUEST = global.DTRACE_HTTP_SERVER_REQUEST;
-            sandbox.DTRACE_HTTP_CLIENT_RESPONSE = global.DTRACE_HTTP_CLIENT_RESPONSE;
-            sandbox.DTRACE_HTTP_CLIENT_REQUEST = global.DTRACE_HTTP_CLIENT_REQUEST;
-            sandbox.DTRACE_NET_STREAM_END = global.DTRACE_NET_STREAM_END;
-            sandbox.DTRACE_NET_SERVER_CONNECTION = global.DTRACE_NET_SERVER_CONNECTION;
-            sandbox.DTRACE_NET_SOCKET_READ = global.DTRACE_NET_SOCKET_READ;
-            sandbox.DTRACE_NET_SOCKET_WRITE = global.DTRACE_NET_SOCKET_WRITE;
+            this.DTRACE_HTTP_SERVER_RESPONSE = global.DTRACE_HTTP_SERVER_RESPONSE;
+            this.DTRACE_HTTP_SERVER_REQUEST = global.DTRACE_HTTP_SERVER_REQUEST;
+            this.DTRACE_HTTP_CLIENT_RESPONSE = global.DTRACE_HTTP_CLIENT_RESPONSE;
+            this.DTRACE_HTTP_CLIENT_REQUEST = global.DTRACE_HTTP_CLIENT_REQUEST;
+            this.DTRACE_NET_STREAM_END = global.DTRACE_NET_STREAM_END;
+            this.DTRACE_NET_SERVER_CONNECTION = global.DTRACE_NET_SERVER_CONNECTION;
+            this.DTRACE_NET_SOCKET_READ = global.DTRACE_NET_SOCKET_READ;
+            this.DTRACE_NET_SOCKET_WRITE = global.DTRACE_NET_SOCKET_WRITE;
         }
         if (global.COUNTER_NET_SERVER_CONNECTION) {
-            sandbox.COUNTER_NET_SERVER_CONNECTION = global.COUNTER_NET_SERVER_CONNECTION;
-            sandbox.COUNTER_NET_SERVER_CONNECTION_CLOSE = global.COUNTER_NET_SERVER_CONNECTION_CLOSE;
-            sandbox.COUNTER_HTTP_SERVER_REQUEST = global.COUNTER_HTTP_SERVER_REQUEST;
-            sandbox.COUNTER_HTTP_SERVER_RESPONSE = global.COUNTER_HTTP_SERVER_RESPONSE;
-            sandbox.COUNTER_HTTP_CLIENT_REQUEST = global.COUNTER_HTTP_CLIENT_REQUEST;
-            sandbox.COUNTER_HTTP_CLIENT_RESPONSE = global.COUNTER_HTTP_CLIENT_RESPONSE;
+            this.COUNTER_NET_SERVER_CONNECTION = global.COUNTER_NET_SERVER_CONNECTION;
+            this.COUNTER_NET_SERVER_CONNECTION_CLOSE = global.COUNTER_NET_SERVER_CONNECTION_CLOSE;
+            this.COUNTER_HTTP_SERVER_REQUEST = global.COUNTER_HTTP_SERVER_REQUEST;
+            this.COUNTER_HTTP_SERVER_RESPONSE = global.COUNTER_HTTP_SERVER_RESPONSE;
+            this.COUNTER_HTTP_CLIENT_REQUEST = global.COUNTER_HTTP_CLIENT_REQUEST;
+            this.COUNTER_HTTP_CLIENT_RESPONSE = global.COUNTER_HTTP_CLIENT_RESPONSE;
         }
+        this.console = {
+            log: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.log', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            },
+            info: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.info', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            },
+            warn: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.warn', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            },
+            error: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.error', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            },
+            dir: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.dir', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            },
+            time: noop,
+            timeEnd: noop,
+            trace: function () {
+                var args = Array.prototype.slice.call(arguments);
+                args.unshift('console.trace', self.__sandboxID);
+                emit.apply(null, args);
+                return null;
+            }
+        }; // console
 
-        for (var item in thisObject.contextVariables) {  // Admin variables
-            sandbox[item] = thisObject.contextVariables[item];
-        }
+    }; // end sandbox Constructor
 
-        vm.createContext(sandbox);
-        return sandbox;
-    };
+    var mySandbox = new sandbox();
+    if (Advance_Require.options._useNativeModulesCopyList.indexOf('http') < 0)
+        Advance_Require.options._useNativeModulesCopyList.push('http');
+    if (Advance_Require.options._useNativeModulesCopyList.indexOf('https') < 0)
+        Advance_Require.options._useNativeModulesCopyList.push('https');
 
+    var myRequire = Advance_Require.getAdvanceRequire(mySandbox);
 
+  // Apply Active Handlre for async operations on modules
+    // http and https request op
+    var myRequestOptions = _.cloneDeep(VUE.requestOptions);
 
-    this.run = function () {
-
-        if (runFunction === null) {
-            throw new Error('Code not ready to use, call "prepareToRun" first');
-        }
-        if (upgradedModule === null) {
-            throw new Error('Problem initializing module, call "prepareToRun"');
-        }
-
-        if (_Code_DirName === null || _Code_FileName === null) {
-            throw new Error('Filename of the running code not set, call "setCodeFileName"');
-        }
-        var temporaryExports = {};
-        runFunction(temporaryExports, upgradedModule.prototype.require, upgradedModule, _Code_FileName, _Code_DirName);
+    myRequestOptions.requestQuery = function(options, callback) {
+        if (mySandbox.__timeoutHappen) return false;
+        else return(true);
     }
 
+    myRequestOptions.on('request', function(req) {
+        if (mySandbox.__timeoutHappen) {
+            req.abort();
+        } else {
+            mySandbox.incActiveHandlers('request');
+        }
+    });
+
+    myRequestOptions.on('response', function(req, res) {
+        if (mySandbox.__timeoutHappen) {
+            req.removeAllListeners();
+            res.removeAllListeners();
+            req.abort();
+            res.destroy();
+        }
+    });
+
+    myRequestOptions.on('afterResponse', function() {
+        mySandbox.decActiveHandlers('afterResponse');
+    });
+
+    myRequestOptions.on('error', function(req, e) {
+        mySandbox.decActiveHandlers('requestError');
+    });
+
+
+    Http_Request_Hook.applyRequestOptions(myRequestOptions, myRequire('http'));
+    Http_Request_Hook.applyRequestOptions(myRequestOptions, myRequire('https'));
+    // other async modules.....
+
+
+
+  //Now just create the context
+    vm.createContext(mySandbox);
+
+    var contextOptions = {
+        filename: VUE._Code_FileName
+    }
+
+    var wrapedCode = wrapCode(VUE._code);
+    var runFunc= vm.runInContext(wrapedCode, mySandbox, contextOptions);
+
+    return {sandbox: mySandbox, require: myRequire, runFunction: runFunc, ID: sandboxID};
+}  // End getContext(maxTimeout, userVariables, sandboxID)
+
+
+var wrapCode = function (code) {
+
+    var wrapHeader = fs.readFileSync('./wraphead.jsw', 'utf8');
+    var wrapFooter = fs.readFileSync('./wrapfoot.jsw', 'utf8');
+
+    return wrapHeader + '\n' + code + '\n' + wrapFooter;
+};
+
+
+Virtual_User_Engine.prototype.getFullContext = function(sandboxID) {
+    return getContext(this.timeout, this.contextVariables, sandboxID);
+}
+
+Virtual_User_Engine.prototype.run = function(fullContext) {
+
+    var temporaryExports = {};
+    fullContext.runFunction.call(module.exports, temporaryExports, fullContext.require, module, this._Code_FileName, this._Code_DirName);
 }
 
 
-
-
-
-//---------------------------------------------------------------------------
-
-module.exports = Virtual_User_Engine;
+module.exports = VUE;

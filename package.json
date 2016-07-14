@@ -1,6 +1,6 @@
 {
   "name": "virtual-user-engine",
-  "version": "0.6.9",
+  "version": "1.0.2",
   "description": "",
   "main": "virtual_user_engine.js",
   "scripts": {
@@ -17,8 +17,8 @@
   },
   "homepage": "https://github.com/API-Load-Testing/Virtual_User_Engine#readme",
   "dependencies": {
-    "advance-require": "^0",
-    "http-request-hook": "^0",
-    "lodash": "^4"
+    "advance-require": "^1.0.11-0",
+    "http-request-hook": "^0.6.14",
+    "lodash": "^4.13.1"
   }
 }
