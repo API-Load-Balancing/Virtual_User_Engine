@@ -129,17 +129,18 @@ function getContext(maxTimeout, userVariables, sandboxID) {
                 self.decActiveHandlers('clearTimeout');
             }
         };
-        this.setImmediate = function (callback, args) {
+        this.setImmediate = function (callback, ...args) {
             if (self.__timeoutHappen) return {};
 
             self.incActiveHandlers('setImmediate');
             return timers.setImmediate(function () {
-                callback.apply(args);
+                callback.apply(null, args);
                 self.decActiveHandlers('setImmediate_executed');
             });
         };
-        this.setInterval = function (callback, delay, args) {
+        this.setInterval = function (callback, delay, ...args) {
             if (self.__timeoutHappen) return {};
+            if ((maxTimeout - (new Date() - __scriptStartTime)) < delay) return {};
 
             self.incActiveHandlers('setInterval');
             var intervalObj = timers.setInterval(function () {
@@ -151,13 +152,14 @@ function getContext(maxTimeout, userVariables, sandboxID) {
             }, Math.min(delay, maxTimeout));
             return intervalObj;
         };
-        this.setTimeout = function (callback, delay, args) {
+        this.setTimeout = function (callback, delay, ...args) {
             if (self.__timeoutHappen) return {};
+            if ((maxTimeout - (new Date() - __scriptStartTime)) < delay) return {};
 
             self.incActiveHandlers('setTimeout');
             return timers.setTimeout(function () {
                 if (!self.__timeoutHappen) {
-                    callback.apply(args);
+                    callback.apply(null, args);
                 }
                 self.decActiveHandlers('setTimeout_executed');
             }, Math.min(delay, maxTimeout));
@@ -289,8 +291,8 @@ function getContext(maxTimeout, userVariables, sandboxID) {
 
 var wrapCode = function (code) {
 
-    var wrapHeader = fs.readFileSync('./wraphead.jsw', 'utf8');
-    var wrapFooter = fs.readFileSync('./wrapfoot.jsw', 'utf8');
+    var wrapHeader = fs.readFileSync(path.resolve(__dirname, 'wraphead.jsw'), 'utf8');
+    var wrapFooter = fs.readFileSync(path.resolve(__dirname, 'wrapfoot.jsw'), 'utf8');
 
     return wrapHeader + '\n' + code + '\n' + wrapFooter;
 };
